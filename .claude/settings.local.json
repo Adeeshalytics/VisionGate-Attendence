@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Test-Path \"C:\\\\Projects\\\\VisionGate\"; \\(Get-ChildItem \"C:\\\\Projects\\\\VisionGate\" -Force -ErrorAction SilentlyContinue | Measure-Object\\).Count)"
+    ]
+  }
+}
