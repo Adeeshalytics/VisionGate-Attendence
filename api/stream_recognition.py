@@ -79,6 +79,10 @@ class RecognitionStreamer:
         self._session: str = ""
         self._error: Optional[str] = None
         self._recognized: dict[str, dict] = {}
+        # Cached heavy components (shared across sessions when pre-warmed).
+        self._mp_detector = None
+        self._haar_clf = None
+        self._liveness_template: Optional[LivenessDetector] = None
 
     # -- lifecycle -------------------------------------------------------
 
@@ -154,6 +158,26 @@ class RecognitionStreamer:
         with self._lock:
             self._recognized = {}
 
+    def prewarm(self) -> None:
+        """Load heavy models once so the first session start is fast.
+
+        Imports face_recognition and builds the MediaPipe detector + dlib
+        liveness predictor ahead of time, caching them for reuse. Safe to
+        call at API startup; failures are logged but non-fatal.
+        """
+        try:
+            import face_recognition  # noqa: F401  (warms the dlib import)
+
+            if self._mp_detector is None:
+                self._mp_detector = build_mediapipe_detector()
+            if self._haar_clf is None:
+                self._haar_clf = build_haar_classifier()
+            if self._liveness_template is None:
+                self._liveness_template = LivenessDetector()
+            logger.info("Recognition models pre-warmed")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Pre-warm failed (will load lazily): %s", exc)
+
     # -- worker ----------------------------------------------------------
 
     def _run(self) -> None:
@@ -164,7 +188,6 @@ class RecognitionStreamer:
             ensure_dirs()
             database.init_db()
 
-            # Load enrolled data
             from recognize import _load_encodings, _load_lbph_model  # reuse loaders
 
             known_encodings, known_labels, name_map = _load_encodings()
@@ -177,14 +200,16 @@ class RecognitionStreamer:
 
             _load_lbph_model()  # loaded for parity; matching uses encodings
 
-            mp_detector = build_mediapipe_detector()
-            haar_clf = build_haar_classifier()
-            # Per-student liveness detectors: each recognized student gets
-            # their own blink-tracking state so multiple people in frame don't
-            # share (and corrupt) one another's blink counters.
-            liveness_by_student: dict[str, LivenessDetector] = {}
+            if self._mp_detector is None:
+                self._mp_detector = build_mediapipe_detector()
+            if self._haar_clf is None:
+                self._haar_clf = build_haar_classifier()
+            mp_detector = self._mp_detector
+            haar_clf = self._haar_clf
 
-            cap = cv2.VideoCapture(config.CAMERA_INDEX)
+            cap = cv2.VideoCapture(config.CAMERA_INDEX, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(config.CAMERA_INDEX)
             if not cap.isOpened():
                 self._error = f"Could not open camera at index {config.CAMERA_INDEX}"
                 with self._lock:
@@ -195,36 +220,75 @@ class RecognitionStreamer:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
 
             logger.info("Streaming recognition session %s started", self._session)
-            frame_count = 0
-            start_time = time.time()
 
-            try:
+            # Shared state between the capture loop and the recognition thread.
+            latest = {"frame": None}
+            frame_lock = threading.Lock()
+            results_lock = threading.Lock()
+            results: list[dict] = []  # most recent recognition overlays
+
+            def recognition_worker() -> None:
+                """Heavy detection/encoding on the latest frame only.
+
+                A spatial cache avoids re-encoding a face that was recognized
+                a moment ago and is still roughly in the same place — the main
+                throughput win when people stand in front of the camera.
+                """
+                liveness_by_student: dict[str, LivenessDetector] = {}
+                cache: list[dict] = []
+                CACHE_TTL = 3.0  # seconds a cached recognition stays valid
+
+                def _match_cache(cx: float, cy: float, w: float):
+                    now = time.time()
+                    for c in cache:
+                        if now - c["t"] > CACHE_TTL:
+                            continue
+                        if abs(c["center"][0] - cx) < w * 0.6 and abs(
+                            c["center"][1] - cy
+                        ) < w * 0.6:
+                            return c
+                    return None
+
                 while not self._stop_event.is_set():
-                    ret, frame = cap.read()
-                    if not ret:
-                        logger.warning("Camera read failed")
-                        time.sleep(0.05)
+                    with frame_lock:
+                        frame = None if latest["frame"] is None else latest["frame"].copy()
+                    if frame is None:
+                        time.sleep(0.01)
                         continue
 
-                    frame_count += 1
-                    # Skip heavy processing on some frames but still stream them.
-                    if frame_count % config.FRAME_SKIP != 0:
-                        self._overlay_status(frame, start_time, frame_count)
-                        self._set_jpeg(_encode_jpeg(frame))
-                        continue
-
-                    color_frame, gray_frame = preprocess.full_preprocess_pipeline(frame)
+                    color_frame, _gray = preprocess.full_preprocess_pipeline(frame)
                     faces = detect_faces(color_frame, mp_detector, haar_clf)
 
+                    now = time.time()
+                    cache[:] = [c for c in cache if now - c["t"] <= CACHE_TTL]
+
+                    new_results: list[dict] = []
                     for bbox in faces:
-                        face_roi_color = crop_face_roi(color_frame, bbox)
-                        if face_roi_color.size == 0:
+                        x, y, w, h = bbox
+                        cx, cy = x + w / 2.0, y + h / 2.0
+                        cached = _match_cache(cx, cy, w)
+                        if cached is not None and cached["confirmed"]:
+                            new_results.append(
+                                {
+                                    "bbox": bbox,
+                                    "label": cached["name"],
+                                    "confidence": cached["confidence"],
+                                    "status": "recognized",
+                                }
+                            )
+                            cached["center"] = (cx, cy)
+                            cached["t"] = now
                             continue
 
-                        rgb_roi = cv2.cvtColor(face_roi_color, cv2.COLOR_BGR2RGB)
+                        face_roi = crop_face_roi(color_frame, bbox)
+                        if face_roi.size == 0:
+                            continue
+                        rgb_roi = cv2.cvtColor(face_roi, cv2.COLOR_BGR2RGB)
                         encs = face_recognition.face_encodings(rgb_roi)
                         if not encs:
-                            draw_bounding_box(frame, bbox, "No Encoding", 0.0, "unknown")
+                            new_results.append(
+                                {"bbox": bbox, "label": "No Encoding", "confidence": 0.0, "status": "unknown"}
+                            )
                             continue
 
                         distances = face_recognition.face_distance(known_encodings, encs[0])
@@ -235,8 +299,6 @@ class RecognitionStreamer:
                         if best_dist <= config.RECOGNITION_THRESHOLD:
                             student_id = known_labels[best_idx]
                             name = name_map.get(student_id, student_id)
-                            # Get-or-create this student's own liveness tracker
-                            # so each person's blinks are counted independently.
                             detector = liveness_by_student.get(student_id)
                             if detector is None:
                                 detector = LivenessDetector()
@@ -255,20 +317,68 @@ class RecognitionStreamer:
                                             "time": datetime.now().strftime("%H:%M:%S"),
                                             "confidence": round(confidence, 3),
                                         }
-                                draw_bounding_box(frame, bbox, name, confidence, "recognized")
+                                cache.append(
+                                    {
+                                        "center": (cx, cy),
+                                        "label": student_id,
+                                        "name": name,
+                                        "status": "recognized",
+                                        "confidence": confidence,
+                                        "t": now,
+                                        "confirmed": True,
+                                    }
+                                )
+                                new_results.append(
+                                    {"bbox": bbox, "label": name, "confidence": confidence, "status": "recognized"}
+                                )
                             else:
-                                draw_bounding_box(frame, bbox, "Blink to verify", 0.0, "spoof")
+                                new_results.append(
+                                    {"bbox": bbox, "label": "Blink to verify", "confidence": 0.0, "status": "spoof"}
+                                )
                         else:
-                            draw_bounding_box(frame, bbox, "Unknown", confidence, "unknown")
+                            new_results.append(
+                                {"bbox": bbox, "label": "Unknown", "confidence": confidence, "status": "unknown"}
+                            )
 
+                    with results_lock:
+                        results[:] = new_results
+
+            rec_thread = threading.Thread(
+                target=recognition_worker, name="recognition-worker", daemon=True
+            )
+            rec_thread.start()
+
+            # Capture + stream loop stays fast because it never does encoding.
+            start_time = time.time()
+            frame_count = 0
+            try:
+                while not self._stop_event.is_set():
+                    ret, frame = cap.read()
+                    if not ret:
+                        logger.warning("Camera read failed")
+                        time.sleep(0.05)
+                        continue
+
+                    frame = preprocess.resize_frame(
+                        frame, config.FRAME_WIDTH, config.FRAME_HEIGHT
+                    )
+                    with frame_lock:
+                        latest["frame"] = frame
+
+                    frame_count += 1
+                    with results_lock:
+                        current = list(results)
+                    for r in current:
+                        draw_bounding_box(
+                            frame, r["bbox"], r["label"], r["confidence"], r["status"]
+                        )
                     self._overlay_status(frame, start_time, frame_count)
                     self._set_jpeg(_encode_jpeg(frame))
+                    time.sleep(0.005)
             finally:
+                self._stop_event.set()
+                rec_thread.join(timeout=3)
                 cap.release()
-                try:
-                    mp_detector.close()
-                except Exception:  # noqa: BLE001
-                    pass
                 logger.info("Streaming session %s ended", self._session)
                 try:
                     database.export_to_csv(datetime.now().strftime("%Y-%m-%d"))

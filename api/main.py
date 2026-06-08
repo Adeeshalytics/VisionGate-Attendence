@@ -118,6 +118,19 @@ class LaunchResponse(BaseModel):
 def _startup() -> None:
     database.init_db()
     logger.info("VisionGate API started; DB at %s", config.DB_PATH)
+    # Pre-warm heavy models in a background thread so API startup isn't blocked
+    # and the first "Start session" click is fast.
+    import threading
+
+    def _warm():
+        try:
+            from api.stream_recognition import streamer as _s
+
+            _s.prewarm()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Model pre-warm thread failed: %s", exc)
+
+    threading.Thread(target=_warm, name="prewarm", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
