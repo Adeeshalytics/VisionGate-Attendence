@@ -146,6 +146,27 @@ def list_students() -> list[dict]:
     ]
 
 
+@app.delete("/students")
+def delete_all_students() -> dict:
+    """Delete ALL students plus their encodings, models and face crops.
+
+    Refuses while a live recognition session is running, since that session
+    holds the camera and reads the encodings being deleted.
+    """
+    from api.stream_recognition import streamer as _streamer
+
+    if _streamer.running:
+        raise HTTPException(
+            status_code=409,
+            detail="Stop the live session before deleting all students.",
+        )
+    from api.reset_all import reset_all
+
+    summary = reset_all(verbose=False)
+    logger.info("Deleted all students via API: %s", summary)
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # Attendance
 # ---------------------------------------------------------------------------
@@ -190,6 +211,16 @@ def clear_attendance(day: str) -> dict:
     except ValueError:
         raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
     removed = database.delete_attendance_by_date(day)
+    # Keep the live "Recognized this session" sidebar in sync: if we cleared
+    # today's records, also clear the streamer's in-memory list so it stops
+    # showing students that no longer have attendance rows.
+    if day == _today_str():
+        try:
+            from api.stream_recognition import streamer as _streamer
+
+            _streamer.reset_recognized()
+        except Exception:  # noqa: BLE001
+            pass
     return {"date": day, "removed": removed}
 
 

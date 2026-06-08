@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { AnalyticsResponse, Student } from "@/lib/types";
+import ConfirmDialog from "./ConfirmDialog";
 import { Badge, Card, EmptyState, ErrorBanner, Spinner } from "./ui";
 
 export default function RegistryTab() {
@@ -10,6 +11,8 @@ export default function RegistryTab() {
   const [sessions, setSessions] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -37,18 +40,41 @@ export default function RegistryTab() {
     return () => clearInterval(id);
   }, [load]);
 
+  const handleDeleteAll = async () => {
+    setDeleting(true);
+    try {
+      await api.deleteAllStudents();
+      setConfirmOpen(false);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete students.");
+      setConfirmOpen(false);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (loading) return <Spinner label="Loading registry…" />;
   if (error) return <ErrorBanner message={error} />;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-100">
-          Enrolled students
-        </h2>
-        <p className="text-sm text-slate-400">
-          {students.length} student{students.length === 1 ? "" : "s"} registered.
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-100">
+            Enrolled students
+          </h2>
+          <p className="text-sm text-slate-400">
+            {students.length} student{students.length === 1 ? "" : "s"} registered.
+          </p>
+        </div>
+        <button
+          onClick={() => setConfirmOpen(true)}
+          disabled={students.length === 0}
+          className="rounded-lg border border-rose-400/30 bg-rose-500/15 px-4 py-2 text-sm font-medium text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Delete all
+        </button>
       </div>
 
       <Card className="p-5">
@@ -94,6 +120,16 @@ export default function RegistryTab() {
           </div>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Delete all students"
+        message={`This permanently deletes all ${students.length} enrolled student(s), their face data, encodings and attendance records. This cannot be undone. Stop any live session first.`}
+        confirmLabel="Delete all"
+        busy={deleting}
+        onConfirm={handleDeleteAll}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }

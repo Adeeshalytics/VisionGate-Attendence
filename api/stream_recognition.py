@@ -145,6 +145,15 @@ class RecognitionStreamer:
             with self._lock:
                 self._latest_jpeg = jpeg
 
+    def reset_recognized(self) -> None:
+        """Clear the in-memory list of recognized students for this session.
+
+        Used when attendance for the active session's day is cleared, so the
+        sidebar stays in sync with the (now-empty) database.
+        """
+        with self._lock:
+            self._recognized = {}
+
     # -- worker ----------------------------------------------------------
 
     def _run(self) -> None:
@@ -170,7 +179,10 @@ class RecognitionStreamer:
 
             mp_detector = build_mediapipe_detector()
             haar_clf = build_haar_classifier()
-            liveness = LivenessDetector()
+            # Per-student liveness detectors: each recognized student gets
+            # their own blink-tracking state so multiple people in frame don't
+            # share (and corrupt) one another's blink counters.
+            liveness_by_student: dict[str, LivenessDetector] = {}
 
             cap = cv2.VideoCapture(config.CAMERA_INDEX)
             if not cap.isOpened():
@@ -223,7 +235,13 @@ class RecognitionStreamer:
                         if best_dist <= config.RECOGNITION_THRESHOLD:
                             student_id = known_labels[best_idx]
                             name = name_map.get(student_id, student_id)
-                            verdict = liveness.check(color_frame, bbox)
+                            # Get-or-create this student's own liveness tracker
+                            # so each person's blinks are counted independently.
+                            detector = liveness_by_student.get(student_id)
+                            if detector is None:
+                                detector = LivenessDetector()
+                                liveness_by_student[student_id] = detector
+                            verdict = detector.check(color_frame, bbox)
                             if verdict["is_live"]:
                                 marked = database.mark_attendance(
                                     student_id, name, confidence, self._session
