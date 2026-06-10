@@ -1,13 +1,5 @@
-"""VisionGate real-time recognition pipeline.
-
-Loads enrolled encodings + the optional LBPH model, opens the webcam,
-detects faces with MediaPipe (Haar fallback), matches against known
-embeddings, gates positive matches through a blink-based liveness check
-and writes attendance rows through :mod:`database`.
-
-Run as a script::
-
-    python recognize.py
+"""Real-time recognition: detect faces, match against enrolled embeddings,
+check liveness, and write attendance. Run with `python recognize.py`.
 """
 
 from __future__ import annotations
@@ -37,16 +29,9 @@ from utils import draw_bounding_box, ensure_dirs, get_logger, get_session_id
 logger = get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Loading enrolled data
-# ---------------------------------------------------------------------------
-
 def _load_encodings() -> Tuple[List[np.ndarray], List[str], dict[str, str]]:
-    """Load encodings, labels and the id->name map from the pickle.
-
-    Returns empty containers (and logs a warning) if the file is missing
-    or unreadable.
-    """
+    """Load encodings, labels and the id->name map. Returns empties if the
+    pickle is missing or unreadable."""
     path: Path = config.ENCODINGS_PATH
     if not path.exists():
         logger.warning("Encodings file missing at %s — no students to recognize", path)
@@ -81,7 +66,7 @@ def _load_lbph_model() -> cv2.face_LBPHFaceRecognizer | None:
 
 
 def _resolve_name(student_id: str, name_map: dict[str, str]) -> str:
-    """Return the display name for ``student_id``, querying the DB if needed."""
+    """Display name for a student id, falling back to a DB lookup, then the id."""
     if student_id in name_map:
         return name_map[student_id]
     try:
@@ -89,7 +74,7 @@ def _resolve_name(student_id: str, name_map: dict[str, str]) -> str:
             if row["student_id"] == student_id:
                 name_map[student_id] = row["name"]
                 return row["name"]
-    except Exception as exc:  # noqa: BLE001 — DB lookup is best-effort
+    except Exception as exc:
         logger.debug("DB name lookup failed for %s: %s", student_id, exc)
     return student_id
 
@@ -103,18 +88,10 @@ def _put_status_text(frame: np.ndarray, text: str, origin: Tuple[int, int]) -> N
     )
 
 
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-
 def run_recognition(session: str | None = None) -> None:
-    """Drive the recognition session.
-
-    Args:
-        session: Optional explicit session identifier. Defaults to
-            :func:`utils.get_session_id` (hour-rounded current time).
-    """
-    import face_recognition  # heavy import — deferred to call time
+    """Run the recognition loop until the user presses Q. ``session`` defaults
+    to the hour-rounded current time."""
+    import face_recognition
 
     ensure_dirs()
     database.init_db()
@@ -168,53 +145,41 @@ def run_recognition(session: str | None = None) -> None:
                     break
                 continue
 
-            color_frame, gray_frame = preprocess.full_preprocess_pipeline(frame)
+            color_frame, _ = preprocess.full_preprocess_pipeline(frame)
             faces = detect_faces(color_frame, mp_detector, haar_clf)
 
             for bbox in faces:
-                x, y, w, h = bbox
                 face_roi_color = crop_face_roi(color_frame, bbox)
-                # face_roi_gray is computed for downstream LBPH comparison
-                face_roi_gray = crop_face_roi(gray_frame, bbox)  # noqa: F841
-
                 if face_roi_color.size == 0:
                     continue
 
                 rgb_roi = cv2.cvtColor(face_roi_color, cv2.COLOR_BGR2RGB)
                 encodings = face_recognition.face_encodings(rgb_roi)
-
                 if not encodings:
                     draw_bounding_box(frame, bbox, "No Encoding", 0.0, "unknown")
                     continue
 
-                encoding = encodings[0]
-                distances = face_recognition.face_distance(known_encodings, encoding)
+                distances = face_recognition.face_distance(known_encodings, encodings[0])
                 best_idx = int(np.argmin(distances))
                 best_dist = float(distances[best_idx])
                 confidence = max(0.0, 1.0 - best_dist)
 
-                if best_dist <= config.RECOGNITION_THRESHOLD:
-                    student_id = known_labels[best_idx]
-                    name = _resolve_name(student_id, name_map)
-
-                    liveness = liveness_detector.check(color_frame, bbox)
-                    if liveness["is_live"]:
-                        marked = database.mark_attendance(
-                            student_id, name, confidence, session
-                        )
-                        if marked:
-                            logger.info(
-                                "Attendance marked: %s (%.2f%%)",
-                                name,
-                                confidence * 100.0,
-                            )
-                        session_log[student_id] += 1
-                        draw_bounding_box(frame, bbox, name, confidence, "recognized")
-                    else:
-                        logger.warning("Spoof / no-blink detected for %s", name)
-                        draw_bounding_box(frame, bbox, "Spoof", 0.0, "spoof")
-                else:
+                if best_dist > config.RECOGNITION_THRESHOLD:
                     draw_bounding_box(frame, bbox, "Unknown", confidence, "unknown")
+                    continue
+
+                student_id = known_labels[best_idx]
+                name = _resolve_name(student_id, name_map)
+
+                if not liveness_detector.check(color_frame, bbox)["is_live"]:
+                    logger.warning("Spoof / no-blink detected for %s", name)
+                    draw_bounding_box(frame, bbox, "Spoof", 0.0, "spoof")
+                    continue
+
+                if database.mark_attendance(student_id, name, confidence, session):
+                    logger.info("Attendance marked: %s (%.2f%%)", name, confidence * 100.0)
+                session_log[student_id] += 1
+                draw_bounding_box(frame, bbox, name, confidence, "recognized")
 
             elapsed = max(1e-6, time.time() - start_time)
             fps = frame_count / elapsed
@@ -232,20 +197,19 @@ def run_recognition(session: str | None = None) -> None:
         cv2.destroyAllWindows()
         try:
             mp_detector.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         logger.info("=== SESSION SUMMARY ===")
         logger.info("Session ID: %s", session)
         logger.info("Students recognized: %d", len(session_log))
         for sid, count in session_log.items():
-            display_name = name_map.get(sid, sid)
-            logger.info("  %s (%s): seen %d times", sid, display_name, count)
+            logger.info("  %s (%s): seen %d times", sid, name_map.get(sid, sid), count)
 
         try:
             csv_path = database.export_to_csv(datetime.now().strftime("%Y-%m-%d"))
             logger.info("Attendance exported to %s", csv_path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("CSV export failed: %s", exc)
 
 

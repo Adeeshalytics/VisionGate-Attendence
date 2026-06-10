@@ -1,8 +1,6 @@
-"""Image preprocessing primitives for VisionGate.
+"""Image preprocessing helpers.
 
-All functions accept and return numpy arrays in OpenCV BGR layout unless
-the docstring states otherwise. The module logger is bound to the module
-name via :func:`utils.get_logger`.
+Functions take and return numpy arrays in OpenCV BGR layout unless noted.
 """
 
 from __future__ import annotations
