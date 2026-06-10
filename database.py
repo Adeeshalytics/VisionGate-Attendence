@@ -204,6 +204,19 @@ def export_to_csv(date: str) -> Path:
     return out_path
 
 
+def delete_attendance_by_date(date: str) -> int:
+    """Delete all attendance records for ``date`` (``YYYY-MM-DD``).
+
+    Returns the number of rows removed. Enrolled students are left intact;
+    only attendance entries for that day are cleared.
+    """
+    with _connect() as conn:
+        cur = conn.execute("DELETE FROM attendance WHERE date = ?", (date,))
+        removed = cur.rowcount
+    logger.info("Deleted %d attendance row(s) for %s", removed, date)
+    return removed
+
+
 def get_attendance_summary() -> dict:
     """Return ``{student_id: {name, total_sessions, dates: []}}``.
 

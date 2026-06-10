@@ -1,0 +1,1 @@
+"""VisionGate FastAPI backend package."""

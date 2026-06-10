@@ -466,10 +466,43 @@ def _prompt_student_details() -> Tuple[str, str, bool]:
     return student_id, name, override
 
 
-def run_enrollment() -> None:
-    """Drive the interactive enrollment session end-to-end."""
+def _resolve_student_details(
+    name: str | None, student_id: str | None
+) -> Tuple[str, str, bool]:
+    """Resolve student details from explicit args or interactive prompts.
+
+    When both ``name`` and ``student_id`` are provided (e.g. from the web
+    form), the interactive prompt is skipped. If the student already
+    exists, re-enrollment proceeds automatically (override=True) instead
+    of asking on the console.
+    """
+    if name and student_id:
+        clean_name = name.strip()
+        clean_id = _sanitize_student_id(student_id)
+        if not clean_name or not clean_id:
+            raise ValueError("Name and Student ID are required")
+        database.init_db()
+        existing = {row["student_id"] for row in database.get_all_students()}
+        override = clean_id in existing
+        if override:
+            logger.info("Student %s already enrolled; re-enrolling.", clean_id)
+        return clean_id, clean_name, override
+    return _prompt_student_details()
+
+
+def run_enrollment(
+    name: str | None = None, student_id: str | None = None
+) -> None:
+    """Drive the enrollment session end-to-end.
+
+    Args:
+        name: Optional student full name. When provided together with
+            ``student_id``, the interactive console prompt is skipped
+            (used by the web form launch path).
+        student_id: Optional student ID.
+    """
     ensure_dirs()
-    student_id, name, override = _prompt_student_details()
+    student_id, name, override = _resolve_student_details(name, student_id)
 
     mp_detector = build_mediapipe_detector()
     haar_classifier = build_haar_classifier()
@@ -583,4 +616,10 @@ def run_enrollment() -> None:
 
 
 if __name__ == "__main__":
-    run_enrollment()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="VisionGate enrollment")
+    parser.add_argument("--name", help="Student full name (skips prompt)")
+    parser.add_argument("--id", dest="student_id", help="Student ID (skips prompt)")
+    args = parser.parse_args()
+    run_enrollment(name=args.name, student_id=args.student_id)
