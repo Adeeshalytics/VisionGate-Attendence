@@ -1,29 +1,16 @@
-"""VisionGate CLI entry point.
-
-Run with::
-
-    python main.py
-
-Presents a numbered menu that dispatches into enrollment, the recognition
-loop, the Streamlit dashboard, CSV export and a summary view.
-"""
+"""Terminal menu for VisionGate — run `python main.py`."""
 
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
-import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-import config
 import database
 from utils import ensure_dirs, get_logger
 
 logger = get_logger("main")
-
-DASHBOARD_PORT = 8501
 
 MENU_BANNER = """
 ╔══════════════════════════════════════════╗
@@ -35,16 +22,11 @@ MENU_BANNER = """
 MENU_OPTIONS = """
   1. Enroll New Student
   2. Start Attendance Session
-  3. Open Dashboard  (opens browser to localhost:8501)
-  4. Export Today's Attendance to CSV
-  5. View Today's Summary (console table)
-  6. Exit
+  3. Export Today's Attendance to CSV
+  4. View Today's Summary
+  5. Exit
 """.rstrip()
 
-
-# ---------------------------------------------------------------------------
-# Action handlers
-# ---------------------------------------------------------------------------
 
 def _action_enroll() -> None:
     from enroll import run_enrollment
@@ -55,7 +37,7 @@ def _action_enroll() -> None:
         logger.info("Enrollment exited: %s", exc)
     except KeyboardInterrupt:
         logger.warning("Enrollment interrupted by user")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Enrollment failed: %s", exc)
         print(f"Enrollment failed: {exc}")
 
@@ -67,61 +49,9 @@ def _action_attendance() -> None:
         run_recognition()
     except KeyboardInterrupt:
         logger.warning("Recognition interrupted by user")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Recognition failed: %s", exc)
         print(f"Recognition failed: {exc}")
-
-
-def _silence_streamlit_welcome() -> None:
-    """Pre-create ``~/.streamlit/credentials.toml`` so Streamlit's first-run
-    email prompt never appears. Without this, the prompt is read from the
-    parent terminal's stdin and silently steals our menu input."""
-    credentials_path = Path.home() / ".streamlit" / "credentials.toml"
-    if credentials_path.exists():
-        return
-    try:
-        credentials_path.parent.mkdir(parents=True, exist_ok=True)
-        credentials_path.write_text('[general]\nemail = ""\n', encoding="utf-8")
-        logger.info("Wrote %s to skip Streamlit welcome prompt", credentials_path)
-    except OSError as exc:
-        logger.warning("Could not write Streamlit credentials file: %s", exc)
-
-
-def _action_dashboard() -> None:
-    dashboard_path = config.PROJECT_ROOT / "dashboard.py"
-    if not dashboard_path.exists():
-        print(f"Dashboard script not found at {dashboard_path}")
-        return
-
-    _silence_streamlit_welcome()
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(dashboard_path),
-        "--server.port",
-        str(DASHBOARD_PORT),
-    ]
-    logger.info("Launching dashboard: %s", " ".join(cmd))
-    try:
-        # stdin=DEVNULL detaches the child so it cannot consume our menu input.
-        subprocess.Popen(
-            cmd,
-            cwd=str(config.PROJECT_ROOT),
-            stdin=subprocess.DEVNULL,
-        )
-    except FileNotFoundError as exc:
-        print(f"Could not launch Streamlit: {exc}")
-        return
-
-    url = f"http://localhost:{DASHBOARD_PORT}"
-    print(f"Dashboard launching at {url}")
-    try:
-        webbrowser.open(url, new=2)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Browser open failed: %s", exc)
 
 
 def _action_export_today() -> None:
@@ -129,7 +59,7 @@ def _action_export_today() -> None:
     try:
         path: Path = database.export_to_csv(today)
         print(f"Today's attendance exported to: {path}")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("CSV export failed: %s", exc)
         print(f"CSV export failed: {exc}")
 
@@ -168,28 +98,17 @@ def _action_view_summary() -> None:
     print(f"\nTotal records: {len(rows)}")
 
 
-# ---------------------------------------------------------------------------
-# Menu loop
-# ---------------------------------------------------------------------------
-
 _ACTIONS = {
     "1": ("Enroll New Student", _action_enroll),
     "2": ("Start Attendance Session", _action_attendance),
-    "3": ("Open Dashboard", _action_dashboard),
-    "4": ("Export Today's Attendance to CSV", _action_export_today),
-    "5": ("View Today's Summary", _action_view_summary),
+    "3": ("Export Today's Attendance to CSV", _action_export_today),
+    "4": ("View Today's Summary", _action_view_summary),
 }
 
 
 def _restore_stdin_if_closed() -> None:
-    """Re-open ``sys.stdin`` if a library closed it under our feet.
-
-    Some third-party libraries (notably ``face_recognition``) call the
-    builtin ``quit()`` on import-time failures, which closes the Python
-    stdin wrapper but leaves file descriptor 0 open. Without this guard
-    the next ``input()`` in the menu would raise
-    ``ValueError: I/O operation on closed file.``
-    """
+    # face_recognition calls quit() if its model package fails to import, which
+    # closes sys.stdin but leaves fd 0 open. Re-wrap it so the next input() works.
     stdin = sys.stdin
     if stdin is None or getattr(stdin, "closed", False):
         try:
@@ -203,12 +122,12 @@ def _prompt_choice() -> str:
     while True:
         _restore_stdin_if_closed()
         try:
-            choice = input("Choice [1-6]: ").strip()
+            choice = input("Choice [1-5]: ").strip()
         except (EOFError, ValueError):
-            return "6"
-        if choice in _ACTIONS or choice == "6":
+            return "5"
+        if choice in _ACTIONS or choice == "5":
             return choice
-        print("Invalid choice — please enter a number from 1 to 6.")
+        print("Invalid choice — please enter a number from 1 to 5.")
 
 
 def main() -> None:
@@ -223,7 +142,7 @@ def main() -> None:
         print()
 
         choice = _prompt_choice()
-        if choice == "6":
+        if choice == "5":
             print("Goodbye.")
             logger.info("VisionGate exited via menu")
             return

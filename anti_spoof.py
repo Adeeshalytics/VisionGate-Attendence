@@ -1,10 +1,10 @@
-"""Single-face blink-based liveness detection.
+"""Blink-based liveness check.
 
-Uses dlib's 68-point facial landmark predictor to compute the Eye Aspect
-Ratio (EAR). A blink is counted when the EAR stays below
-:data:`config.EAR_THRESHOLD` for at least :data:`config.EAR_CONSEC_FRAMES`
-consecutive frames. Within a rolling window of ``BLINK_WINDOW`` frames the
-subject is considered live if at least one blink was observed.
+Uses dlib's 68-point landmarks to compute the Eye Aspect Ratio (EAR). A blink
+is counted when the EAR dips below config.EAR_THRESHOLD for at least
+config.EAR_CONSEC_FRAMES frames in a row. Within a rolling BLINK_WINDOW of
+frames, we treat the subject as live once we've seen at least one blink -
+which is enough to reject a held-up photo.
 """
 
 from __future__ import annotations
@@ -81,11 +81,10 @@ def _ensure_landmark_model() -> Path:
 class LivenessDetector:
     """Blink-based liveness gate driven by dlib facial landmarks.
 
-    The detector is stateful: it tracks how many consecutive frames the
-    EAR has been below threshold and counts a blink whenever the run
-    ends after at least :data:`config.EAR_CONSEC_FRAMES`. A subject is
-    considered live for as long as at least one blink has occurred in
-    the last :attr:`BLINK_WINDOW` frames.
+    It's stateful: it tracks how many frames in a row the EAR has been below
+    threshold and counts a blink when that run ends after at least
+    config.EAR_CONSEC_FRAMES frames. A subject counts as live as long as at
+    least one blink happened in the last BLINK_WINDOW frames.
     """
 
     BLINK_WINDOW: int = 60  # frames

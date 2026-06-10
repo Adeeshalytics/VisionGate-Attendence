@@ -1,12 +1,10 @@
-"""Insert demo data for frontend development/presentation rehearsal.
-
-Run::
+"""Insert demo data for frontend development / presentation rehearsal.
 
     python -m api.seed_demo          # insert demo students + attendance
     python -m api.seed_demo --clear  # remove ONLY the demo rows
 
-The demo student IDs are namespaced with a ``DEMO_`` prefix so the
-``--clear`` step can remove them without touching real enrollments.
+Demo IDs use a DEMO_ prefix so --clear can drop them without touching real
+enrollments.
 """
 
 from __future__ import annotations
@@ -20,8 +18,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import config  # noqa: E402
-import database  # noqa: E402
+import config
+import database
 
 DEMO_PREFIX = "DEMO_"
 DEMO_STUDENTS = [

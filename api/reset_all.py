@@ -1,12 +1,8 @@
 """Wipe ALL enrolled students, attendance, encodings and face data.
 
-This is destructive and irreversible. It clears:
-  - the ``students`` and ``attendance`` tables
-  - encodings.pkl
-  - lbph_model.yml and lbph_labels.pkl
-  - every folder under data/enrolled_faces/
-
-Run::
+Destructive and irreversible - clears the students and attendance tables,
+encodings.pkl, lbph_model.yml + lbph_labels.pkl, and every folder under
+data/enrolled_faces/.
 
     python -m api.reset_all          # asks for confirmation
     python -m api.reset_all --yes    # skip the confirmation prompt
@@ -23,8 +19,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import config  # noqa: E402
-import database  # noqa: E402
+import config
+import database
 
 _LBPH_LABELS = config.PROJECT_ROOT / "data" / "encodings" / "lbph_labels.pkl"
 

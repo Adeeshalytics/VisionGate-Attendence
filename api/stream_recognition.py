@@ -1,11 +1,9 @@
-"""In-process recognition session that streams annotated frames to the web UI.
+"""In-process recognition that streams annotated frames to the web UI.
 
-This reuses the exact same detection / encoding / liveness / attendance
-logic as :mod:`recognize`, but instead of showing an OpenCV window
-(``cv2.imshow``) it runs the loop in a background thread and keeps the most
-recent annotated frame as a JPEG that the FastAPI MJPEG endpoint can serve.
-
-The native ``recognize.py`` script is left untouched as a reliable fallback.
+Same detection/encoding/liveness/attendance logic as recognize.py, but instead
+of an OpenCV window it runs in a background thread and keeps the latest
+annotated frame as a JPEG for the FastAPI MJPEG endpoint to serve. The native
+recognize.py is left alone as a reliable fallback.
 """
 
 from __future__ import annotations
@@ -24,17 +22,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import config  # noqa: E402
-import database  # noqa: E402
-import preprocess  # noqa: E402
-from anti_spoof import LivenessDetector  # noqa: E402
-from enroll import (  # noqa: E402
+import config
+import database
+import preprocess
+from anti_spoof import LivenessDetector
+from enroll import (
     build_haar_classifier,
     build_mediapipe_detector,
     crop_face_roi,
     detect_faces,
 )
-from utils import draw_bounding_box, ensure_dirs, get_logger, get_session_id  # noqa: E402
+from utils import draw_bounding_box, ensure_dirs, get_logger, get_session_id
 
 logger = get_logger("stream")
 
@@ -166,7 +164,7 @@ class RecognitionStreamer:
         call at API startup; failures are logged but non-fatal.
         """
         try:
-            import face_recognition  # noqa: F401  (warms the dlib import)
+            import face_recognition
 
             if self._mp_detector is None:
                 self._mp_detector = build_mediapipe_detector()
@@ -175,7 +173,7 @@ class RecognitionStreamer:
             if self._liveness_template is None:
                 self._liveness_template = LivenessDetector()
             logger.info("Recognition models pre-warmed")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Pre-warm failed (will load lazily): %s", exc)
 
     # -- worker ----------------------------------------------------------
@@ -382,9 +380,9 @@ class RecognitionStreamer:
                 logger.info("Streaming session %s ended", self._session)
                 try:
                     database.export_to_csv(datetime.now().strftime("%Y-%m-%d"))
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error("CSV export failed: %s", exc)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._error = str(exc)
             logger.exception("Recognition stream crashed: %s", exc)
             with self._lock:

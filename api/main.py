@@ -1,16 +1,13 @@
-"""FastAPI backend for the VisionGate web frontend.
+"""FastAPI backend for the web frontend.
 
-This is a thin REST layer over the existing :mod:`database` module. It does
-**not** touch the camera pipeline — enrollment and recognition keep running
-as native Python processes that write to the same SQLite database. The API
-only reads/serves that data (plus a couple of helper endpoints to launch the
-native scripts and export CSVs).
+A thin REST layer over the database module. It doesn't run the camera itself -
+enrollment and recognition stay as separate Python processes writing to the
+same SQLite DB; the API mostly reads that data and serves it, plus a few
+endpoints to launch the native scripts, stream the live feed and export CSVs.
 
-Run with::
+Start it from the project root:
 
     python -m uvicorn api.main:app --reload --port 8000
-
-from the project root, inside the ``visiongate`` conda environment.
 """
 
 from __future__ import annotations
@@ -31,9 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import config  # noqa: E402
-import database  # noqa: E402
-from utils import get_logger  # noqa: E402
+import config
+import database
+from utils import get_logger
 
 logger = get_logger("api")
 
@@ -61,9 +58,7 @@ app.add_middleware(
 )
 
 
-# ---------------------------------------------------------------------------
 # Pydantic response/request models
-# ---------------------------------------------------------------------------
 
 class Student(BaseModel):
     student_id: str
@@ -110,9 +105,7 @@ class LaunchResponse(BaseModel):
     pid: Optional[int] = None
 
 
-# ---------------------------------------------------------------------------
 # Startup
-# ---------------------------------------------------------------------------
 
 @app.on_event("startup")
 def _startup() -> None:
@@ -127,24 +120,20 @@ def _startup() -> None:
             from api.stream_recognition import streamer as _s
 
             _s.prewarm()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("Model pre-warm thread failed: %s", exc)
 
     threading.Thread(target=_warm, name="prewarm", daemon=True).start()
 
 
-# ---------------------------------------------------------------------------
 # Health / meta
-# ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "db_path": str(config.DB_PATH)}
 
 
-# ---------------------------------------------------------------------------
 # Students
-# ---------------------------------------------------------------------------
 
 @app.get("/students", response_model=list[Student])
 def list_students() -> list[dict]:
@@ -180,9 +169,7 @@ def delete_all_students() -> dict:
     return summary
 
 
-# ---------------------------------------------------------------------------
 # Attendance
-# ---------------------------------------------------------------------------
 
 def _today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
@@ -232,14 +219,12 @@ def clear_attendance(day: str) -> dict:
             from api.stream_recognition import streamer as _streamer
 
             _streamer.reset_recognized()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return {"date": day, "removed": removed}
 
 
-# ---------------------------------------------------------------------------
 # Analytics
-# ---------------------------------------------------------------------------
 
 @app.get("/analytics", response_model=AnalyticsResponse)
 def analytics(
@@ -306,9 +291,7 @@ def analytics(
     }
 
 
-# ---------------------------------------------------------------------------
 # CSV export
-# ---------------------------------------------------------------------------
 
 @app.get("/export/{day}")
 def export_csv(day: str) -> FileResponse:
@@ -326,9 +309,7 @@ def export_csv(day: str) -> FileResponse:
     )
 
 
-# ---------------------------------------------------------------------------
 # Launch native camera scripts (enrollment / recognition)
-# ---------------------------------------------------------------------------
 
 def _launch_script(script: str, args: list[str] | None = None, new_console: bool = True) -> LaunchResponse:
     script_path = PROJECT_ROOT / script
@@ -349,7 +330,7 @@ def _launch_script(script: str, args: list[str] | None = None, new_console: bool
 
     try:
         proc = subprocess.Popen(cmd, **kwargs)
-    except OSError as exc:  # noqa: BLE001
+    except OSError as exc:
         logger.exception("Failed to launch %s", script)
         raise HTTPException(status_code=500, detail=str(exc))
     logger.info("Launched %s (pid=%s)", script, proc.pid)
@@ -403,7 +384,7 @@ def launch_recognize() -> LaunchResponse:
             cwd=str(PROJECT_ROOT),
             stdin=subprocess.DEVNULL,
         )
-    except OSError as exc:  # noqa: BLE001
+    except OSError as exc:
         logger.exception("Failed to launch recognize.py")
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -430,7 +411,7 @@ def stop_recognize() -> LaunchResponse:
             _recognize_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             _recognize_proc.kill()
-    except OSError as exc:  # noqa: BLE001
+    except OSError as exc:
         logger.warning("Failed to stop recognize.py: %s", exc)
     finally:
         _recognize_proc = None
@@ -445,13 +426,11 @@ def recognize_status() -> dict:
     return {"running": running, "pid": _recognize_proc.pid if running else None}
 
 
-# ---------------------------------------------------------------------------
 # In-dashboard recognition stream (MJPEG)
-# ---------------------------------------------------------------------------
 
-import time  # noqa: E402
+import time
 
-from api.stream_recognition import streamer  # noqa: E402
+from api.stream_recognition import streamer
 
 
 class RecognizedStudent(BaseModel):

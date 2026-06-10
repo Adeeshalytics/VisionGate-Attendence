@@ -1,13 +1,9 @@
-"""VisionGate enrollment pipeline.
+"""Enrollment: capture a student's face, build the recognition gallery.
 
-Captures faces from the webcam, computes face_recognition (dlib ResNet)
-128-d embeddings and trains an OpenCV LBPH model as a secondary comparator.
-
-Primary detector is MediaPipe (Tasks API, BlazeFace short-range). If
-MediaPipe returns no detections for a frame, the Haar cascade bundled
-with OpenCV is used as a fallback.
-
-Run as a script for the interactive enrollment session::
+Grabs frames from the webcam, computes 128-d face_recognition (dlib) embeddings
+and also trains an OpenCV LBPH model as a second opinion. Detection uses
+MediaPipe (BlazeFace short-range) first and falls back to OpenCV's Haar cascade
+when MediaPipe finds nothing in a frame.
 
     python enroll.py
 """
@@ -56,9 +52,7 @@ LBPH_FACE_SIZE: Tuple[int, int] = (200, 200)
 DETECTION_BOX_COLOR_BGR = (255, 128, 0)  # BLUE-ish (BGR)
 
 
-# ---------------------------------------------------------------------------
 # Detection
-# ---------------------------------------------------------------------------
 
 def _ensure_blaze_face_model() -> Path:
     """Download the BlazeFace short-range tflite model if missing.
@@ -97,7 +91,7 @@ def detect_face_mediapipe(
 
     Args:
         frame: BGR image.
-        detector: A ``FaceDetector`` built by :func:`build_mediapipe_detector`.
+        detector: a FaceDetector built by build_mediapipe_detector.
 
     Returns:
         A list of ``(x, y, w, h)`` boxes in absolute pixel coordinates,
@@ -169,9 +163,7 @@ def detect_faces(
     return boxes
 
 
-# ---------------------------------------------------------------------------
 # Cropping & encodings
-# ---------------------------------------------------------------------------
 
 def crop_face_roi(
     frame: np.ndarray,
@@ -230,7 +222,7 @@ def compute_encodings(image_list: Iterable[np.ndarray]) -> Tuple[List[np.ndarray
             results = face_recognition.face_encodings(
                 rgb, known_face_locations=locations
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failures += 1
             logger.warning("Encoding raised on image #%d: %s", idx, exc)
             continue
@@ -296,11 +288,10 @@ def train_lbph(
     int_labels: List[int],
     path: Path,
 ) -> None:
-    """Train an OpenCV LBPH recognizer and persist it to ``path``.
+    """Train an OpenCV LBPH recognizer and save it to path.
 
-    All images are resized to :data:`LBPH_FACE_SIZE`. If a model already
-    exists at ``path``, it is updated with the new samples; otherwise a
-    fresh recognizer is trained.
+    Images are resized to LBPH_FACE_SIZE. If a model already exists at path it
+    gets updated with the new samples; otherwise we train a fresh one.
     """
     if len(gray_face_images) == 0:
         logger.warning("train_lbph called with no images; skipping")
@@ -341,9 +332,7 @@ def train_lbph(
     logger.info("Saved LBPH model to %s", path)
 
 
-# ---------------------------------------------------------------------------
 # LBPH label bookkeeping
-# ---------------------------------------------------------------------------
 
 _LBPH_LABEL_MAP_PATH: Path = config.PROJECT_ROOT / "data" / "encodings" / "lbph_labels.pkl"
 
@@ -370,9 +359,7 @@ def _next_lbph_label(mapping: dict[str, int]) -> int:
     return (max(mapping.values()) + 1) if mapping else 0
 
 
-# ---------------------------------------------------------------------------
 # Persistence: raw face images on disk
-# ---------------------------------------------------------------------------
 
 def _save_raw_faces(student_id: str, raw_crops: List[np.ndarray]) -> Path:
     student_dir = config.ENROLLED_FACES_DIR / student_id
@@ -384,9 +371,7 @@ def _save_raw_faces(student_id: str, raw_crops: List[np.ndarray]) -> Path:
     return student_dir
 
 
-# ---------------------------------------------------------------------------
 # Display helpers
-# ---------------------------------------------------------------------------
 
 def _overlay_text(frame: np.ndarray, text: str, origin: Tuple[int, int]) -> None:
     cv2.putText(
@@ -417,9 +402,7 @@ def _flash(frame: np.ndarray) -> np.ndarray:
     return cv2.addWeighted(frame, 0.3, white, 0.7, 0)
 
 
-# ---------------------------------------------------------------------------
 # Orchestrator
-# ---------------------------------------------------------------------------
 
 _STUDENT_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -571,7 +554,7 @@ def run_enrollment(
         cv2.destroyAllWindows()
         try:
             mp_detector.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     logger.info(

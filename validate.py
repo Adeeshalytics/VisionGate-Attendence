@@ -1,29 +1,19 @@
-"""VisionGate model validation / evaluation suite.
+"""Evaluation suite for the face-recognition pipeline.
 
-This module quantitatively validates the face-recognition pipeline the
-way a biometric system should be evaluated, producing the metrics and
-plots an examiner expects in a computer-vision project report:
+Produces the numbers and plots you'd want in the project report:
+genuine vs. impostor distance distributions, FAR/FRR, an ROC curve with the
+Equal Error Rate (which is what justifies our distance threshold rather than
+just guessing it), identification accuracy/precision/recall/F1 with a
+confusion matrix under stratified k-fold CV, and a dlib-vs-LBPH comparison.
 
-* Genuine vs. impostor distance distributions.
-* False Acceptance Rate (FAR) and False Rejection Rate (FRR).
-* ROC curve and Equal Error Rate (EER) — used to *justify* the
-  recognition threshold instead of guessing it.
-* Identification accuracy / precision / recall / F1 with a confusion
-  matrix, evaluated with stratified k-fold cross-validation.
-* Head-to-head comparison of the two models we trained: dlib ResNet
-  128-d embeddings (face_recognition) vs. OpenCV LBPH.
-
-Data sources (``--source``):
-    auto       Local test set if present, else LFW (Olivetti fallback),
-               plus any enrolled faces. (default)
-    lfw        Labeled Faces in the Wild subset (downloaded via sklearn).
-    olivetti   Olivetti faces (tiny, offline-friendly).
-    enrolled   The faces captured during enrollment.
-    local      Images under data/test_faces/<identity>/*.
-    synthetic  Fabricated embeddings/images — no download, no dlib.
-               Lets you smoke-test the whole pipeline instantly offline.
-
-Run::
+Pick the data with --source:
+    auto       local test set if present, else LFW (Olivetti fallback), plus
+               any enrolled faces (default)
+    lfw        Labeled Faces in the Wild subset (downloaded via sklearn)
+    olivetti   Olivetti faces (tiny, works offline)
+    enrolled   faces captured during enrollment
+    local      images under data/test_faces/<identity>/
+    synthetic  fabricated data - no download, no dlib, instant smoke test
 
     python validate.py                 # auto data, 5-fold CV
     python validate.py --source lfw
@@ -36,7 +26,6 @@ import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import cv2
 import numpy as np
@@ -45,18 +34,18 @@ import pandas as pd
 import matplotlib
 
 matplotlib.use("Agg")  # headless: save figures without a display
-import matplotlib.pyplot as plt  # noqa: E402
-import seaborn as sns  # noqa: E402
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-from sklearn.metrics import (  # noqa: E402
+from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import StratifiedKFold  # noqa: E402
-from sklearn.metrics import pairwise_distances  # noqa: E402
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import pairwise_distances
 
 import config
 from utils import get_logger
@@ -72,9 +61,7 @@ UNKNOWN_LABEL = "__unknown__"
 DEFAULT_THRESHOLDS = np.round(np.linspace(0.0, 1.0, 101), 3)
 
 
-# ---------------------------------------------------------------------------
 # Dataset container
-# ---------------------------------------------------------------------------
 
 @dataclass
 class FaceDataset:
@@ -85,7 +72,7 @@ class FaceDataset:
         images_gray: List of HxW uint8 grayscale images (for LBPH).
         labels: 1-D array of string identity labels, aligned with images.
         source: Human-readable description of where the data came from.
-        embeddings: Filled in by :func:`encode_dataset` (N x 128 float).
+        embeddings: filled in by encode_dataset (N x 128 float).
     """
 
     images_rgb: list[np.ndarray] = field(default_factory=list)
@@ -103,9 +90,7 @@ class FaceDataset:
         return sorted(set(self.labels.tolist()))
 
 
-# ---------------------------------------------------------------------------
 # Dataset loaders
-# ---------------------------------------------------------------------------
 
 def _to_uint8(img: np.ndarray) -> np.ndarray:
     if img.dtype != np.uint8:
@@ -219,11 +204,11 @@ def make_synthetic_dataset(n_identities: int = 5, per_identity: int = 12,
 
     Used for instant offline smoke tests of the whole evaluation pipeline
     without downloading data or running dlib. Embeddings are pre-filled so
-    :func:`encode_dataset` is skipped.
+    encode_dataset is skipped.
 
-    The default ``centre_scale``/``noise_std`` are tuned so that, in 128-D,
-    genuine pair distances cluster near ~0.35 and impostor distances near
-    ~0.85 — the same scale produced by real ``face_recognition`` embeddings,
+    The default centre_scale/noise_std are tuned so that, in 128-D, genuine
+    pair distances cluster near ~0.35 and impostor distances near ~0.85 -
+    the same scale produced by real face_recognition embeddings,
     so the offline charts look representative.
     """
     rng = np.random.default_rng(seed)
@@ -259,7 +244,7 @@ def _merge(a: FaceDataset, b: FaceDataset) -> FaceDataset:
 
 
 def build_dataset(source: str = "auto") -> FaceDataset:
-    """Assemble a :class:`FaceDataset` according to ``source``."""
+    """Assemble a FaceDataset according to the chosen source."""
     source = source.lower()
     if source == "synthetic":
         return make_synthetic_dataset()
@@ -272,7 +257,7 @@ def build_dataset(source: str = "auto") -> FaceDataset:
     if source == "lfw":
         try:
             return load_lfw_dataset()
-        except Exception as exc:  # noqa: BLE001 — network/format issues
+        except Exception as exc:
             logger.warning("LFW load failed (%s); falling back to Olivetti", exc)
             return load_olivetti_dataset()
 
@@ -283,7 +268,7 @@ def build_dataset(source: str = "auto") -> FaceDataset:
     else:
         try:
             base = load_lfw_dataset()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("LFW unavailable (%s); using Olivetti", exc)
             base = load_olivetti_dataset()
 
@@ -293,9 +278,7 @@ def build_dataset(source: str = "auto") -> FaceDataset:
     return base
 
 
-# ---------------------------------------------------------------------------
 # Encoding
-# ---------------------------------------------------------------------------
 
 def encode_dataset(ds: FaceDataset) -> FaceDataset:
     """Compute 128-d dlib embeddings for every image (skips if pre-filled).
@@ -337,7 +320,7 @@ def _encode_one(face_recognition, rgb: np.ndarray) -> np.ndarray | None:
     """Encode one image, detecting first and falling back to whole-frame."""
     try:
         locs = face_recognition.face_locations(rgb)
-    except Exception:  # noqa: BLE001
+    except Exception:
         locs = []
     if locs:
         encs = face_recognition.face_encodings(rgb, known_face_locations=locs[:1])
@@ -348,9 +331,7 @@ def _encode_one(face_recognition, rgb: np.ndarray) -> np.ndarray | None:
     return encs[0] if encs else None
 
 
-# ---------------------------------------------------------------------------
 # Verification metrics: genuine/impostor, FAR/FRR, ROC, EER
-# ---------------------------------------------------------------------------
 
 def genuine_impostor_distances(
     embeddings: np.ndarray, labels: np.ndarray
@@ -413,9 +394,7 @@ def optimal_threshold(sweep: pd.DataFrame) -> float:
     return float(sweep["threshold"].iloc[idx])
 
 
-# ---------------------------------------------------------------------------
 # Identification metrics (closed/open-set) with k-fold CV
-# ---------------------------------------------------------------------------
 
 def _safe_n_splits(labels: np.ndarray, requested: int) -> int:
     counts = pd.Series(labels).value_counts()
@@ -521,9 +500,7 @@ def lbph_cv(gray_images: list[np.ndarray], labels: np.ndarray, n_splits: int = 5
     }
 
 
-# ---------------------------------------------------------------------------
 # Plotting
-# ---------------------------------------------------------------------------
 
 def _ensure_out_dir() -> Path:
     VALIDATION_DIR.mkdir(parents=True, exist_ok=True)
@@ -620,9 +597,7 @@ def plot_model_comparison(dlib_res: dict, lbph_res: dict, out: Path) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
 # Orchestration
-# ---------------------------------------------------------------------------
 
 def run_validation(source: str = "auto", n_splits: int = 5) -> dict:
     """Run the full evaluation and return a results dict; saves charts + JSON."""

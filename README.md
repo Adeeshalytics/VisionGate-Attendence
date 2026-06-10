@@ -64,9 +64,9 @@ blink-based liveness gate.
                                    └──────────────┬───────────────┘
                                                   ▼
                                    ┌──────────────────────────────┐
-                                   │ Streamlit Dashboard          │
+                                   │ FastAPI + Next.js Dashboard  │
                                    │ today | history | registry   │
-                                   │ analytics                    │
+                                   │ analytics | live session     │
                                    └──────────────────────────────┘
 ```
 
@@ -110,18 +110,25 @@ python main.py
 | :---:  | --- |
 | 1 | **Enroll a new student** — prompts for name/ID, captures `ENROLLMENT_IMAGES` raw face crops, augments them 7× per crop, trains 128-d encodings + LBPH, persists to disk and DB. |
 | 2 | **Start an attendance session** — opens the recognition loop with liveness gating. Press **Q** to end the session and auto-export today's CSV. |
-| 3 | **Open the dashboard** — launches `streamlit run dashboard.py` on `http://localhost:8501` and opens your default browser. |
-| 4 | **Export today's CSV** — writes `data/attendance/attendance_<YYYY-MM-DD>.csv`. |
-| 5 | **Print today's summary** — formatted console table of today's attendance. |
-| 6 | Exit. |
+| 3 | **Export today's CSV** — writes `data/attendance/attendance_<YYYY-MM-DD>.csv`. |
+| 4 | **Print today's summary** — formatted console table of today's attendance. |
+| 5 | Exit. |
+
+The web dashboard is a separate stack (FastAPI backend + Next.js frontend):
+
+```bash
+python -m uvicorn api.main:app --port 8000   # backend
+cd frontend && npm run dev                    # frontend on http://localhost:3000
+```
 
 Individual modules can also be run directly:
 
 ```bash
-python enroll.py            # enrollment only
-python recognize.py         # recognition only
-streamlit run dashboard.py  # dashboard only
-pytest tests/ -v            # run the test suite
+python enroll.py             # webcam enrollment
+python enroll_from_images.py people/   # enrollment from photos
+python recognize.py          # recognition only
+python validate.py --source lfw        # evaluation + charts
+pytest tests/ -v             # run the test suite
 ```
 
 ## 6. Configuration
@@ -154,10 +161,12 @@ visiongate/
 ├── enroll.py            # MediaPipe + Haar, dlib encodings, LBPH training
 ├── anti_spoof.py        # EAR blink-based liveness gate
 ├── recognize.py         # live recognition loop + attendance writing
-├── dashboard.py         # Streamlit UI (4 tabs)
+├── enroll_from_images.py# enrollment from a folder of photos
 ├── validate.py          # model validation / evaluation suite
 ├── evaluation.ipynb     # notebook that renders the evaluation inline
 ├── main.py              # CLI menu entry point
+├── api/                 # FastAPI backend for the web dashboard
+├── frontend/            # Next.js web dashboard
 ├── data/
 │   ├── attendance.db    # SQLite database
 │   ├── enrolled_faces/  # raw crops per student
