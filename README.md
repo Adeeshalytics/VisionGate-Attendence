@@ -155,18 +155,54 @@ visiongate/
 ├── anti_spoof.py        # EAR blink-based liveness gate
 ├── recognize.py         # live recognition loop + attendance writing
 ├── dashboard.py         # Streamlit UI (4 tabs)
+├── validate.py          # model validation / evaluation suite
+├── evaluation.ipynb     # notebook that renders the evaluation inline
 ├── main.py              # CLI menu entry point
 ├── data/
 │   ├── attendance.db    # SQLite database
 │   ├── enrolled_faces/  # raw crops per student
 │   ├── encodings/       # encodings.pkl + lbph_model.yml
-│   └── attendance/      # exported CSVs
+│   ├── attendance/      # exported CSVs
+│   ├── test_faces/      # (optional) drop-in test images per identity
+│   └── validation/      # generated metrics + charts
 ├── models/              # cached MediaPipe + dlib model files
 ├── logs/                # rotating logs (visiongate.log)
-└── tests/               # pytest suite (preprocess + database)
+└── tests/               # pytest suite (preprocess + database + validation)
 ```
 
-## 8. Known limitations
+## 8. Validation & evaluation
+
+The recogniser is evaluated as a biometric system, not just demoed. Run:
+
+```bash
+python validate.py --source synthetic   # instant offline smoke test
+python validate.py --source lfw          # real benchmark (LFW subset)
+python validate.py --source auto         # LFW + your enrolled faces
+```
+
+or open `evaluation.ipynb` for the same results rendered inline.
+
+**What is measured**
+
+| Metric | Why it matters for an attendance system |
+|---|---|
+| Genuine vs. impostor distance distributions | Shows class separability of the embeddings |
+| **FAR** (False Acceptance Rate) | A stranger being marked as a real student — the critical security failure |
+| **FRR** (False Rejection Rate) | A real student being denied — the convenience failure |
+| **ROC curve + EER** | Data-driven justification of `RECOGNITION_THRESHOLD` |
+| Accuracy / Precision / Recall / F1 | Standard identification scorecard (macro-averaged) |
+| Confusion matrix | Which identities get confused with whom |
+| dlib ResNet vs. LBPH | Quantitative comparison of the two trained models |
+
+Evaluation uses **stratified k-fold cross-validation** so the numbers are
+not an artefact of one split. All charts and a `metrics_summary.json` are
+written to `data/validation/`. To evaluate with your own classmates, drop
+images into `data/test_faces/<name>/` and run `--source auto`.
+
+The metric maths (FAR/FRR sweep, EER) is itself unit-tested in
+`tests/test_validate.py`.
+
+## 9. Known limitations
 
 - **Heavy occlusion** (masks, large sunglasses, hands across the face) will
   degrade both detection and recognition accuracy.
@@ -181,7 +217,7 @@ visiongate/
 - **No identity verification beyond face**: anyone who passes the liveness
   check and matches an enrolled embedding will be marked present.
 
-## 9. Future improvements
+## 10. Future improvements
 
 - Replace the dlib ResNet embeddings with **InsightFace / ArcFace** to
   improve robustness to pose and illumination.
@@ -194,7 +230,7 @@ visiongate/
 - Add **role-based authentication** for the dashboard so only authorised
   staff can view rosters.
 
-## 10. References
+## 11. References
 
 > _The bibliography for this mini-project is maintained in the project
 > proposal document. Paste the proposal's reference list here verbatim
